@@ -42,7 +42,7 @@ RGBmatrixPanel matrix(A, B, C,  D,  CLK, LAT, OE, true);
 
 // Gain will tell us how to scale the samples to fit in the "time" space display.
 // We use this to divide the input signal, so bigger numbers make the input smaller.
-int gain=6;
+int gain=10;
 
 // These are the raw samples from the audio input.
 #define SAMPLE_SIZE FHT_N
@@ -50,6 +50,14 @@ int sample[SAMPLE_SIZE] = {0};
 
 //  Audio samples from the ADC are "centered" around 2.5v, which maps to 512 on the ADC.
 #define SAMPLE_BIAS 512
+
+// We have half the number of frequency bins as samples.
+#define FREQ_BINS (SAMPLE_SIZE/2)
+
+// This contains the "biggest" frequency seen in a while. 
+// We'll build in automatic decay.
+// Note 3KHz / 16 is 187 Hz per bin.
+int freq_hist[FREQ_BINS]={0};
 
 // Color pallete for spectrum...cooler than just single green.
 uint16_t spectrum_colors[] = 
@@ -183,6 +191,47 @@ void display_freq_raw( void )
  
 }
 
+// This function has a little more persistent frequency display.
+// If the frequency bin magnitude is currently the biggest, store it.
+// If it isn't, decay the current frequency bin by 1.
+void display_freq_decay( void )
+{
+  int i;
+  int mag;
+  
+  int x;    
+
+
+  // The output of the fht is half the size of our input buffer.
+  for (i = 0; i < FREQ_BINS; i++)
+  {
+    // figure out (and map) the current frequency bin range.
+    // Note we're going from 0 to -15, where -15 indicates the biggest magnitude.
+    mag = fht_lin_out[i];
+    mag = constrain(mag, 0, MAX_FREQ_MAG);
+    mag = map(mag, 0, MAX_FREQ_MAG, 0, 15);
+
+    // check if current magnitude is smaller than our recent history.   
+    if (mag < freq_hist[i])
+    {
+      // decay by 1...but only if we're not going negative
+      if (freq_hist[i]) 
+      {
+        mag = freq_hist[i] - 1;
+      }
+    }
+
+    // store new value...this will either be the new max or the new "decayed" value.
+    freq_hist[i] = mag;
+     
+    
+    x = i*2;
+    
+    matrix.drawRect(x,32,2,0-mag, spectrum_colors[i]);
+  }
+ 
+}
+
 void setup() 
 {
   matrix.begin();
@@ -203,8 +252,10 @@ void loop()
   doFHT();
 
   // ...and display the results.
-  display_freq_raw();
+  display_freq_decay();
 
   // since we're double-buffered, this updates the display
   matrix.swapBuffers(true);
+
+  
 }
