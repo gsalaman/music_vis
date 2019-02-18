@@ -1,9 +1,8 @@
 // Music Visualizer
-// Uses 32x32 RGB Matrix.
-// Top part of screen is "time display".  
-// Bottom Part is "frequency display".
+// 64x32 RGB Matrix.
+// All freq, no time.
 // Use 32 samples to do an FHT; yields 16 frequency bins
-// Sample audio using regular analogReads...3-4KHz
+// Sample audio using regular analogReads...3 KHz, interrupts enabled.
 
 // These two defines are for the RGB Matrix
 #include <Adafruit_GFX.h>   // Core graphics library
@@ -35,7 +34,7 @@
 
 // Note "false" for double-buffering to consume less memory, or "true" for double-buffered.
 // Double-buffered makes updates look smoother.
-RGBmatrixPanel matrix(A, B, C,  D,  CLK, LAT, OE, true);
+RGBmatrixPanel matrix(A, B, C,  D,  CLK, LAT, OE, true, 64);
 
 //  We're using A5 as our audio input pin.
 #define AUDIO_PIN A5
@@ -43,6 +42,10 @@ RGBmatrixPanel matrix(A, B, C,  D,  CLK, LAT, OE, true);
 // Gain will tell us how to scale the samples to fit in the "time" space display.
 // We use this to divide the input signal, so bigger numbers make the input smaller.
 int gain=10;
+
+// We use the following define to act as a "gain stage"...adjust this up or down so
+// that the FHT output fills the range for your input volume.
+#define MAX_FREQ_MAG 20
 
 // These are the raw samples from the audio input.
 #define SAMPLE_SIZE FHT_N
@@ -164,32 +167,8 @@ void doFHT( void )
   // Their lin mag functons corrupt memory!!!  Gonna try this for the 32 point one...we may be okay.
   fht_mag_lin();  
 }
-
-// This function takes the output of our FHT and displays them as frequency bins.  
-// We use the following define to act as a "gain stage"...adjust this up or down so
-// that the FHT output fills the range for your input volume.
-#define MAX_FREQ_MAG 20
-void display_freq_raw( void )
-{
-  int i;
-  int mag;
-  int x;    
-
-
-  // The output of the fht is half the size of our input buffer.
-  for (i = 0; i < SAMPLE_SIZE/2; i++)
-  {
-    //mag = glenn_mag_calc(i);
-    mag = fht_lin_out[i];
-    mag = constrain(mag, 0, MAX_FREQ_MAG);
-    mag = map(mag, 0, MAX_FREQ_MAG, 0, -15);
-
-    x = i*2;
-    
-    matrix.drawRect(x,32,2,mag, spectrum_colors[i]);
-  }
  
-}
+
 
 // This function has a little more persistent frequency display.
 // If the frequency bin magnitude is currently the biggest, store it.
@@ -209,7 +188,7 @@ void display_freq_decay( void )
     // Note we're going from 0 to -15, where -15 indicates the biggest magnitude.
     mag = fht_lin_out[i];
     mag = constrain(mag, 0, MAX_FREQ_MAG);
-    mag = map(mag, 0, MAX_FREQ_MAG, 0, 15);
+    mag = map(mag, 0, MAX_FREQ_MAG, 0, 31);
 
     // check if current magnitude is smaller than our recent history.   
     if (mag < freq_hist[i])
@@ -225,9 +204,9 @@ void display_freq_decay( void )
     freq_hist[i] = mag;
      
     
-    x = i*2;
+    x = i*4;
     
-    matrix.drawRect(x,32,2,0-mag, spectrum_colors[i]);
+    matrix.drawRect(x,32,4,0-mag, spectrum_colors[i]);
   }
  
 }
@@ -244,9 +223,6 @@ void loop()
 
   // black out anything that was there before.
   matrix.fillScreen(0);
-
-  // show the time display
-  show_samples_lines();
 
   // do the FHT to populate our frequency display
   doFHT();
