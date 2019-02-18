@@ -1,7 +1,8 @@
 // Music Visualizer
 // 64x32 RGB Matrix.
 // All freq, no time.
-// Use 32 samples to do an FHT; yields 16 frequency bins
+// Use 64 samples to do an FHT; yields 32 frequency bins
+// Only display bottom 21 
 // Sample audio using regular analogReads...3 KHz, interrupts enabled.
 
 // These two defines are for the RGB Matrix
