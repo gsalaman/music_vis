@@ -10,7 +10,7 @@
 
 // FHT defines.  This library defines an input buffer for us called fht_input of signed integers.  
 #define LIN_OUT 1
-#define FHT_N   32
+#define FHT_N   64
 #include <FHT.h>
 
 // Pin defines for the 32x32 RGB matrix.
@@ -79,8 +79,15 @@ uint16_t spectrum_colors[] =
   matrix.Color444(0,3,4),   // index 11
   matrix.Color444(0,2,5),   // index 12 
   matrix.Color444(0,1,6),   // index 13
-  matrix.Color444(0,0,6),   // index 14
-  matrix.Color444(0,0,10)    // index 15 
+  matrix.Color444(0,0,7),   // index 14
+  matrix.Color444(1,0,6),   // index 15
+  matrix.Color444(2,0,5),   // index 16
+  matrix.Color444(3,0,4),   // index 17
+  matrix.Color444(4,0,3),   // index 18
+  matrix.Color444(5,0,2),   // index 19
+  matrix.Color444(6,0,1),   // index 20
+  matrix.Color444(7,0,0),   // index 21
+  
 };
 
 // This function fills our buffer with audio samples.
@@ -181,8 +188,9 @@ void display_freq_decay( void )
   int x;    
 
 
-  // The output of the fht is half the size of our input buffer.
-  for (i = 0; i < FREQ_BINS; i++)
+  // we have 32 freq bins, but I want to each bin to be 3 wide.
+  // This means I'm going from bins 1 to 21 (which gets us to 63)
+  for (i = 0; i < 21; i++)
   {
     // figure out (and map) the current frequency bin range.
     // Note we're going from 0 to -15, where -15 indicates the biggest magnitude.
@@ -204,9 +212,9 @@ void display_freq_decay( void )
     freq_hist[i] = mag;
      
     
-    x = i*4;
+    x = i*3;
     
-    matrix.drawRect(x,32,4,0-mag, spectrum_colors[i]);
+    matrix.drawRect(x,32,3,0-mag, spectrum_colors[i]);
   }
  
 }
