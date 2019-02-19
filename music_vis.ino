@@ -1,9 +1,8 @@
 // Music Visualizer
 // 64x32 RGB Matrix.
 // All freq, no time.
-// Use 64 samples to do an FHT; yields 32 frequency bins
-// Only display bottom 21 
-// Sample audio using regular analogReads...3 KHz, interrupts enabled.
+// Use 64 samples to do an FHT; yields 32 frequency bins.  We're only using the bottom 21.
+// Sample audio using bit-banged ADC at 20 KHz...so 10 KHz frequncy bandwidth, but only displaying up to ~6.67 KHz. 
 
 // These two defines are for the RGB Matrix
 #include <Adafruit_GFX.h>   // Core graphics library
@@ -37,17 +36,6 @@
 // Double-buffered makes updates look smoother.
 RGBmatrixPanel matrix(A, B, C,  D,  CLK, LAT, OE, true, 64);
 
-//  We're using A5 as our audio input pin.
-#define AUDIO_PIN A5
-
-// Gain will tell us how to scale the samples to fit in the "time" space display.
-// We use this to divide the input signal, so bigger numbers make the input smaller.
-int gain=10;
-
-// We use the following define to act as a "gain stage"...adjust this up or down so
-// that the FHT output fills the range for your input volume.
-#define MAX_FREQ_MAG 20
-
 // These are the raw samples from the audio input.
 #define SAMPLE_SIZE FHT_N
 int sample[SAMPLE_SIZE] = {0};
@@ -60,7 +48,6 @@ int sample[SAMPLE_SIZE] = {0};
 
 // This contains the "biggest" frequency seen in a while. 
 // We'll build in automatic decay.
-// Note 3KHz / 16 is 187 Hz per bin.
 int freq_hist[FREQ_BINS]={0};
 
 // Color pallete for spectrum...cooler than just single green.
@@ -91,62 +78,39 @@ uint16_t spectrum_colors[] =
   
 };
 
+void setupADC( void )
+{
+
+   // Prescalar is the last 3 bits of the ADCSRA register.  
+   // Here are my measured sample rates (and resultant frequency ranges):
+   // Prescalar of 128 gives ~10 KHz sample rate (5 KHz range)    mask  111
+   // Prescalar of 64 gives ~20 KHz sample rate (10 KHz range)    mask: 110    
+   // Prescalar of 32 gives ~40 KHz sample rate (20 KHz range)    mask: 101
+   
+    ADCSRA = 0b11100110;      // Upper bits set ADC to free-running mode.
+
+    // A5, internal reference.
+    ADMUX =  0b00000101;
+
+    delay(50);  //wait for voltages to stabalize.  
+
+}
+
 // This function fills our buffer with audio samples.
 void collect_samples( void )
 {
   int i;
-  
+
+  //noInterrupts();
   for (i = 0; i < SAMPLE_SIZE; i++)
   {
-    sample[i] = analogRead(AUDIO_PIN);
+    while(!(ADCSRA & 0x10));        // wait for ADC to complete current conversion ie ADIF bit set
+    ADCSRA = ADCSRA | 0x10;        // clear ADIF bit so that ADC can do next operation (0xf5)
+    sample[i] = ADC;
   }
+  //interrupts();
 }
 
-// This function takes a raw sample (0-511) and maps it to a number from 0-15 for display
-// on our RGB matrix.
-int map_sample( int input )
-{
-  int mapped_sample;
-
-  // start by taking out DC bias.  This will make negative #s...
-  mapped_sample = input - SAMPLE_BIAS;
-
-  // add in gain.
-  mapped_sample = mapped_sample / gain;
-  
-  // center on 16.
-  mapped_sample = mapped_sample + 8;
-
-  // and clip.
-  if (mapped_sample > 15) mapped_sample = 15;
-  if (mapped_sample < 0) mapped_sample = 0;
-
-  return mapped_sample;
-}
-
-
-// This function takes our buffer of input samples (time based) and
-// displays them on our RGB matrix.
-void show_samples_lines( void )
-{
-  int x;
-  int y;
-  int last_x;
-  int last_y;
-
-  // For the first column, start with the y value of that sample.
-  last_x = 0;
-  last_y = map_sample(sample[0]);
-
-  // now draw the rest.
-  for (x=1; x < SAMPLE_SIZE; x++)
-  {
-    y=map_sample(sample[x]);
-    matrix.drawLine(last_x,last_y,x,y,matrix.Color333(0,0,1));
-    last_x = x;
-    last_y = y;
-  }
-}
 
 
 // This function does the FHT to convert the time-based samples (in the sample[] array)
@@ -172,11 +136,61 @@ void doFHT( void )
   fht_reorder();
   fht_run();
 
-  // Their lin mag functons corrupt memory!!!  Gonna try this for the 32 point one...we may be okay.
-  fht_mag_lin();  
+  // Their lin mag functons corrupt memory!!! Use mine instead.
+  //fht_mag_lin();  
 }
  
 
+// It looks like fht_mag_lin is corrupting memory.  Instead of debugging AVR assembly, 
+// I'm gonna code my own C version.  
+// I'll be using floating point math rather than assembly, so it'll be much slower...
+// ...but hopefully still faster than the FFT algos.
+int glenn_mag_calc(int bin)
+{
+  float sum_real_imag=0;
+  float diff_real_imag=0;
+  float result;
+  int   intMag;
+
+  // The FHT algos use the input array as it's output scratchpad.
+  // Bins 0 through N/2 are the sums of the real and imaginary parts.
+  // Bins N to N/2 are the differences, but note that it's reflected from the beginning.
+
+  sum_real_imag = fht_input[bin];
+
+  if (bin) diff_real_imag = fht_input[FHT_N - bin];
+
+  result = (sum_real_imag * sum_real_imag) + (diff_real_imag * diff_real_imag);
+
+  result = sqrt(result);
+  result = result + 0.5;  // rounding
+
+  intMag = result;
+  
+  return intMag;
+
+}
+
+void display_freq_raw( void )
+{
+  int i;
+  int mag;
+  
+  int x;    
+
+  // only map 21 bins to give a cooler display.
+  for (i = 0; i < 21; i++)
+  {
+    // figure out (and map) the current frequency bin range.
+    mag = glenn_mag_calc(i);
+    mag = constrain(mag, 0, 31);
+    
+    x = i*3;
+    
+    matrix.drawRect(x,32,3,0-mag, spectrum_colors[i%22]);
+  }
+ 
+}
 
 // This function has a little more persistent frequency display.
 // If the frequency bin magnitude is currently the biggest, store it.
@@ -189,15 +203,12 @@ void display_freq_decay( void )
   int x;    
 
 
-  // we have 32 freq bins, but I want to each bin to be 3 wide.
-  // This means I'm going from bins 1 to 21 (which gets us to 63)
-  for (i = 0; i < 21; i++)
+  // we have 32 freq bins
+  for (i = 0; i < 32; i++)
   {
     // figure out (and map) the current frequency bin range.
-    // Note we're going from 0 to -15, where -15 indicates the biggest magnitude.
-    mag = fht_lin_out[i];
-    mag = constrain(mag, 0, MAX_FREQ_MAG);
-    mag = map(mag, 0, MAX_FREQ_MAG, 0, 31);
+    mag = glenn_mag_calc(i);
+    mag = constrain(mag, 0, 31);
 
     // check if current magnitude is smaller than our recent history.   
     if (mag < freq_hist[i])
@@ -213,15 +224,20 @@ void display_freq_decay( void )
     freq_hist[i] = mag;
      
     
-    x = i*3;
+    x = i*2;
     
-    matrix.drawRect(x,32,3,0-mag, spectrum_colors[i]);
+    matrix.drawRect(x,32,2,0-mag, matrix.Color333(1,0,0));
   }
  
 }
 
 void setup() 
 {
+
+  Serial.begin(9600);
+  
+  setupADC();
+  
   matrix.begin();
 }
 
@@ -237,7 +253,7 @@ void loop()
   doFHT();
 
   // ...and display the results.
-  display_freq_decay();
+  display_freq_raw();
 
   // since we're double-buffered, this updates the display
   matrix.swapBuffers(true);
