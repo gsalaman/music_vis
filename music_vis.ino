@@ -3,6 +3,15 @@
 // All freq, no time.
 // Use 64 samples to do an FHT; yields 32 frequency bins.  We're only using the bottom 21.
 // Sample audio using bit-banged ADC at 20 KHz...so 10 KHz frequncy bandwidth, but only displaying up to ~6.67 KHz. 
+//
+// Implementation notes:
+// Delay budget is dominated by the display times...the 64x32 takes about 37 ms to do a display. 
+// Sample collection time is small (64/20,000 = 3.2 ms).
+// Transform time is also small (just under 1 ms)
+// This means the actual display lags by about 40 ms...and we are using less than 10% of of actual sound data.
+//
+// The frequency transform is also unprecise...without locking interrupts, we get hit by the timer1 ISR, used by
+// the display to update...if we lock interrupts, we get funky display effects (mostly bright flickers).
 
 // These two defines are for the RGB Matrix
 #include <Adafruit_GFX.h>   // Core graphics library
@@ -204,7 +213,7 @@ void display_freq_decay( void )
 
 
   // we have 32 freq bins
-  for (i = 0; i < 32; i++)
+  for (i = 0; i < 21; i++)
   {
     // figure out (and map) the current frequency bin range.
     mag = glenn_mag_calc(i);
@@ -224,9 +233,9 @@ void display_freq_decay( void )
     freq_hist[i] = mag;
      
     
-    x = i*2;
+    x = i*3;
     
-    matrix.drawRect(x,32,2,0-mag, matrix.Color333(1,0,0));
+    matrix.drawRect(x,32,3,0-mag, spectrum_colors[i]);
   }
  
 }
@@ -253,7 +262,7 @@ void loop()
   doFHT();
 
   // ...and display the results.
-  display_freq_raw();
+  display_freq_decay();
 
   // since we're double-buffered, this updates the display
   matrix.swapBuffers(true);
