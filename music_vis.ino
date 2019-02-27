@@ -1,49 +1,43 @@
 // Music Visualizer
-// 64x32 RGB Matrix.
+// 8x8 RGB Matrix.
 // All freq, no time.
-// Use 64 samples to do an FHT; yields 32 frequency bins.  We're only using the bottom 21.
-// Sample audio using bit-banged ADC at 20 KHz...so 10 KHz frequncy bandwidth, but only displaying up to ~6.67 KHz. 
-//
-// Implementation notes:
-// Delay budget is dominated by the display times...the 64x32 takes about 37 ms to do a display. 
-// Sample collection time is small (64/20,000 = 3.2 ms).
-// Transform time is also small (just under 1 ms)
-// This means the actual display lags by about 40 ms...and we are using less than 10% of of actual sound data.
-//
-// The frequency transform is also unprecise...without locking interrupts, we get hit by the timer1 ISR, used by
-// the display to update...if we lock interrupts, we get funky display effects (mostly bright flickers).
+// Use 64 samples to do an FHT; yields 16 frequency bins.  We're only using the bottom 8.
+// Sample audio using bit-banged ADC at 10 KHz...so 5 KHz frequncy bandwidth.  Bin size is 78 Hz/bin
+// ...since I'm only displaying the bottom 8, that gives a 0 to 1.2 KHz range
 
-// These two defines are for the RGB Matrix
-#include <Adafruit_GFX.h>   // Core graphics library
-#include <RGBmatrixPanel.h> // Hardware-specific library
+// define for using the 8x8...just use fast LED.
+#include <FastLED.h>
 
 // FHT defines.  This library defines an input buffer for us called fht_input of signed integers.  
 #define LIN_OUT 1
-#define FHT_N   64
+#define FHT_N  64
 #include <FHT.h>
 
-// Pin defines for the 32x32 RGB matrix.
-#define CLK 11  
-#define LAT 10
-#define OE  9
-#define A   A0
-#define B   A1
-#define C   A2
-#define D   A3
+// defines for the LEDs
+#define LED_PIN 7
+#define LED_TYPE WS2812
+#define COLOR_ORDER GRB
+#define BRIGHTNESS 30
 
-/* Other Pin Mappings...hidden in the RGB library:
- *  Sig   Uno  Mega
- *  R0    2    24
- *  G0    3    25
- *  B0    4    26
- *  R1    5    27
- *  G1    6    28
- *  B1    7    29
- */
+// I'm going to orient the array so that the 0th pixel is on the bottom left, 1 is one up, etc.
+// The 8th pixel is the bottom most, one column to the right.
+// The 63rd is the top right.
+#define NUM_LEDS 64
+CRGB leds[NUM_LEDS];
 
-// Note "false" for double-buffering to consume less memory, or "true" for double-buffered.
-// Double-buffered makes updates look smoother.
-RGBmatrixPanel matrix(A, B, C,  D,  CLK, LAT, OE, true, 64);
+// 8 rows of "color" for our spec-an
+CRGB matrix_color[] =
+{
+  CRGB::Blue,
+  CRGB::Green,
+  CRGB::Yellow,
+  CRGB::Orange,
+  CRGB::Red,
+  CRGB::Purple,
+  CRGB::Blue,
+  CRGB::Green
+};
+
 
 // These are the raw samples from the audio input.
 #define SAMPLE_SIZE FHT_N
@@ -58,34 +52,6 @@ int sample[SAMPLE_SIZE] = {0};
 // This contains the "biggest" frequency seen in a while. 
 // We'll build in automatic decay.
 int freq_hist[FREQ_BINS]={0};
-
-// Color pallete for spectrum...cooler than just single green.
-uint16_t spectrum_colors[] = 
-{
-  matrix.Color444(7,0,0),   // index 0
-  matrix.Color444(6,1,0),   // index 1
-  matrix.Color444(5,2,0),   // index 2
-  matrix.Color444(4,3,0),   // index 3
-  matrix.Color444(3,4,0),   // index 4
-  matrix.Color444(2,5,0),   // index 5
-  matrix.Color444(1,6,0),   // index 6
-  matrix.Color444(0,7,0),   // index 7 
-  matrix.Color444(0,6,1),   // index 8
-  matrix.Color444(0,5,2),   // index 9
-  matrix.Color444(0,4,3),   // index 10
-  matrix.Color444(0,3,4),   // index 11
-  matrix.Color444(0,2,5),   // index 12 
-  matrix.Color444(0,1,6),   // index 13
-  matrix.Color444(0,0,7),   // index 14
-  matrix.Color444(1,0,6),   // index 15
-  matrix.Color444(2,0,5),   // index 16
-  matrix.Color444(3,0,4),   // index 17
-  matrix.Color444(4,0,3),   // index 18
-  matrix.Color444(5,0,2),   // index 19
-  matrix.Color444(6,0,1),   // index 20
-  matrix.Color444(7,0,0),   // index 21
-  
-};
 
 void setupADC( void )
 {
@@ -180,6 +146,17 @@ int glenn_mag_calc(int bin)
 
 }
 
+void display_bar(int x, int y, CRGB color)
+{
+  int i;
+
+  for (i=0; i<y; i++)
+  {
+    leds[8*x+i] = color;
+  }
+}
+
+#define MAX_MAG 32
 void display_freq_raw( void )
 {
   int i;
@@ -187,23 +164,26 @@ void display_freq_raw( void )
   
   int x;    
 
-  // only map 21 bins to give a cooler display.
-  for (i = 0; i < 21; i++)
+  // only map bottom 8 bins
+  for (i = 0; i < 8; i++)
   {
     // figure out (and map) the current frequency bin range.
     mag = glenn_mag_calc(i);
-    mag = constrain(mag, 0, 31);
+    mag = map(mag, 0, MAX_MAG, 0, 8);
+    mag = constrain(mag, 0, 8);
+
+    display_bar(i,mag,matrix_color[i]);
     
-    x = i*3;
-    
-    matrix.drawRect(x,32,3,0-mag, spectrum_colors[i%22]);
   }
+  FastLED.show();
  
 }
+
 
 // This function has a little more persistent frequency display.
 // If the frequency bin magnitude is currently the biggest, store it.
 // If it isn't, decay the current frequency bin by 1.
+#if 0
 void display_freq_decay( void )
 {
   int i;
@@ -217,7 +197,8 @@ void display_freq_decay( void )
   {
     // figure out (and map) the current frequency bin range.
     mag = glenn_mag_calc(i);
-    mag = constrain(mag, 0, 31);
+    mag = map(mag, 0, MAX_MAG, 0, 8);
+    mag = constrain(mag, 0, 8);
 
     // check if current magnitude is smaller than our recent history.   
     if (mag < freq_hist[i])
@@ -239,15 +220,27 @@ void display_freq_decay( void )
   }
  
 }
+#endif
 
 void setup() 
 {
 
   Serial.begin(9600);
+  FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection( TypicalLEDStrip );
+  FastLED.setBrightness(  BRIGHTNESS );
+    
+  // clear the array, just in case.
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  FastLED.show();
   
   setupADC();
-  
-  matrix.begin();
+
+
+  display_bar(0,1,CRGB::Red);
+  display_bar(1,2,CRGB::Green);
+  FastLED.show();
+
+  FastLED.delay(1000);
 }
 
 void loop() 
@@ -256,16 +249,17 @@ void loop()
   collect_samples();
 
   // black out anything that was there before.
-  matrix.fillScreen(0);
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
 
   // do the FHT to populate our frequency display
   doFHT();
 
   // ...and display the results.
-  display_freq_decay();
 
-  // since we're double-buffered, this updates the display
-  matrix.swapBuffers(true);
+  unsigned long start_time = micros();
+  display_freq_raw();
+  unsigned long stop_time = micros();
 
+  Serial.println(stop_time - start_time);
   
 }
