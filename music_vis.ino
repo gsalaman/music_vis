@@ -4,11 +4,16 @@
 // Use 64 samples to do an FHT; yields 32 frequency bins.  We're only using the bottom 21.
 // Sample audio using bit-banged ADC at 20 KHz...so 10 KHz frequncy bandwidth, but only displaying up to ~6.67 KHz. 
 //
+// Try going to single-buffered RGB matrix, and only draw what we need.  Going with fill rather than draw for this iteration.
+//
 // Implementation notes:
 // Delay budget is dominated by the display times...the 64x32 takes about 37 ms to do a display. 
+// Doing the single-buffered-draw-erase method, we're down to somewhere between 8ms and 14ms, depending on how
+//   much we need to draw or erase.
 // Sample collection time is small (64/20,000 = 3.2 ms).
 // Transform time is also small (just under 1 ms)
-// This means the actual display lags by about 40 ms...and we are using less than 10% of of actual sound data.
+// With this, the actual display lags by about 15 ms...that's reasonable.  
+// Unfortunatly, we're still only using 20% of the sound data...we'll miss stuff.  :(
 //
 // The frequency transform is also unprecise...without locking interrupts, we get hit by the timer1 ISR, used by
 // the display to update...if we lock interrupts, we get funky display effects (mostly bright flickers).
@@ -43,7 +48,7 @@
 
 // Note "false" for double-buffering to consume less memory, or "true" for double-buffered.
 // Double-buffered makes updates look smoother.
-RGBmatrixPanel matrix(A, B, C,  D,  CLK, LAT, OE, true, 64);
+RGBmatrixPanel matrix(A, B, C,  D,  CLK, LAT, OE, false, 64);
 
 // These are the raw samples from the audio input.
 #define SAMPLE_SIZE FHT_N
@@ -210,6 +215,7 @@ void display_freq_decay( void )
   int mag;
   
   int x;    
+  int y;
 
 
   // we have 32 freq bins
@@ -219,25 +225,31 @@ void display_freq_decay( void )
     mag = glenn_mag_calc(i);
     mag = constrain(mag, 0, 31);
 
-    // check if current magnitude is smaller than our recent history.   
-    if (mag < freq_hist[i])
-    {
-      // decay by 1...but only if we're not going negative
-      if (freq_hist[i]) 
-      {
-        mag = freq_hist[i] - 1;
-      }
-    }
-
-    // store new value...this will either be the new max or the new "decayed" value.
-    freq_hist[i] = mag;
-     
-    
     x = i*3;
     
-    matrix.drawRect(x,32,3,0-mag, spectrum_colors[i]);
-  }
- 
+    // Just draw the deltas.  
+    
+    // The trick here:  mag and freq_hist go from 0 to 31.
+    // 0 on the display is the top-right...but we want it to be bottom right.  x stays the same, y needs to reflect. 
+    // Yes, this should really be 31, but our FFT never yields anything under 1.
+    y = 32-freq_hist[i];
+    
+    // If the bar is bigger, we need to extend the rectangle to the top...no erases needed.
+    if (mag > freq_hist[i])
+    {
+      matrix.fillRect(x,y,3,freq_hist[i]-mag, spectrum_colors[i]);
+      freq_hist[i] = mag;
+    }
+    else if (mag < freq_hist[i])
+    {
+      // in this case, we're going to decay just by one.  I can use a line for that.
+      matrix.drawLine(x,y-1,x+2,y-1,0);
+      freq_hist[i]--;
+    }
+    
+  } // end of loop over freq bins.
+     
+    
 }
 
 void setup() 
@@ -255,17 +267,20 @@ void loop()
 
   collect_samples();
 
-  // black out anything that was there before.
-  matrix.fillScreen(0);
-
   // do the FHT to populate our frequency display
   doFHT();
 
+  
+  //unsigned long start_time=micros();
+
   // ...and display the results.
   display_freq_decay();
+  
+  //unsigned long stop_time=micros();
+  //Serial.println(stop_time - start_time);
 
   // since we're double-buffered, this updates the display
-  matrix.swapBuffers(true);
+  //matrix.swapBuffers(true);
 
   
 }
